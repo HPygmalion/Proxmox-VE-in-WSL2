@@ -5,7 +5,9 @@ param(
     [string]$DistroName = 'PVE',
     [string]$InstallPath = 'D:\WSL\PVE',
     [string]$Hostname = 'HPygmalion',
-    [string]$BootstrapUrl = 'https://raw.githubusercontent.com/HPygmalion/Proxmox-VE-in-WSL2/main/scripts/bootstrap-pve.sh'
+    [string]$BootstrapUrl = 'https://raw.githubusercontent.com/HPygmalion/Proxmox-VE-in-WSL2/main/scripts/bootstrap-pve.sh',
+    [ValidateSet('tsinghua','official')]
+    [string]$Mirror = 'tsinghua'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -71,7 +73,7 @@ function Invoke-Bootstrap {
     Invoke-WebRequest -Uri $BootstrapUrl -OutFile $script -UseBasicParsing
 
     Write-Step "Preparing hostname: $Hostname"
-    & wsl -d Debian -u root -- bash -lc "hostnamectl set-hostname '$Hostname'; printf '%s\n' '$Hostname' > /etc/hostname"
+    & wsl -d Debian -u root -- bash -lc "hostnamectl set-hostname $Hostname; printf '%s\n' $Hostname > /etc/hostname"
 
     Write-Step 'Installing Proxmox VE 9.2 and configuring WSL integration'
     Get-Content $script -Raw | & wsl -d Debian -u root -- bash

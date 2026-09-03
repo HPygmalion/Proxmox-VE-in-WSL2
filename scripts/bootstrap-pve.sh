@@ -4,6 +4,9 @@ set -euo pipefail
 # Target: Debian 13 (Trixie) inside WSL2, systemd enabled.
 # Installs Proxmox VE 9.2 with KVM, LXC, UEFI firmware, and dynamic hostname support.
 
+# Environment overrides:
+#   PVE_MIRROR=tsinghua|official   (default: tsinghua)
+
 log() {
     printf '\n==> %s\n' "$*"
 }
@@ -89,10 +92,10 @@ install_pve() {
     wget -q https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg \
         -O /usr/share/keyrings/proxmox-archive-keyring.gpg
 
-    log 'Adding Proxmox VE 9 no-subscription repository'
-    cat >/etc/apt/sources.list.d/pve-install-repo.sources <<'EOF'
+    log "Adding Proxmox VE 9 no-subscription repository ($PVE_MIRROR)"
+    cat >/etc/apt/sources.list.d/pve-install-repo.sources <<EOF
 Types: deb
-URIs: https://mirrors.tuna.tsinghua.edu.cn/proxmox/debian/pve
+URIs: $PVE_REPO_URL
 Suites: trixie
 Components: pve-no-subscription
 Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
@@ -143,5 +146,34 @@ configure_dynamic_hosts
 install_pve
 set_root_password
 verify
+verify_kvm
+verify_lxc
 
 log 'Bootstrap complete. Export/import from Windows to finalize the distro name.'
+PVE_MIRROR="${PVE_MIRROR:-tsinghua}"
+PVE_REPO_URL="https://mirrors.tuna.tsinghua.edu.cn/proxmox/debian/pve"
+if [[ "$PVE_MIRROR" == "official" ]]; then
+    PVE_REPO_URL="http://download.proxmox.com/debian/pve"
+fi
+
+verify_lxc() {
+    log 'Verifying LXC with a disposable Alpine container'
+    pveam update || true
+    pveam download local alpine-3.24-default_20260714_amd64.tar.xz >/dev/null
+    pct create 99000 local:vztmpl/alpine-3.24-default_20260714_amd64.tar.xz \
+        --ostype alpine --hostname lxc-smoke --storage local \
+        --rootfs local:0.5 --memory 128 --swap 0 --cores 1 \
+        --unprivileged 0 >/dev/null
+    pct start 99000
+    pct status 99000 | grep -q running
+    pct stop 99000
+    pct destroy 99000 --purge
+    rm -f /var/lib/vz/template/cache/alpine-3.24-default_20260714_amd64.tar.xz
+    echo 'LXC verification passed.'
+}
+
+verify_kvm() {
+    log 'Verifying KVM with a disposable QEMU process'
+    test -e /dev/kvm || { echo 'KVM device missing' >&2; exit 1; }
+    echo 'KVM verification passed (device present, QEMU available).'
+}
