@@ -1,34 +1,36 @@
+[English](README.en.md) | 简体中文
+
 # Proxmox VE in WSL2
 
-Run Proxmox VE 9.2 inside Windows 11 WSL2 using Debian 13 (Trixie).
+在 Windows 11 的 WSL2 中运行 Proxmox VE 9.2，基于 Debian 13 (Trixie)。
 
-> This is an unofficial, experimental setup for personal labs, development and migration testing. It is not suitable for production, Ceph, HA clusters, physical bridging, or critical workloads.
+> 这是非官方、实验性质的项目，适用于个人实验、开发和迁移测试。不适用于生产环境、Ceph、HA 集群、物理网桥或关键业务。
 
-## Supported versions
+## 支持版本
 
-- Windows 11 with WSL2
+- Windows 11 + WSL2
 - Debian 13 (Trixie)
 - Proxmox VE 9.2
-- KVM and LXC are tested, but depend on Windows virtualization and WSL version.
+- KVM 和 LXC 已实际验证，但依赖 Windows 虚拟化与 WSL 版本。
 
-## What this does
+## 安装内容
 
-The installer:
+安装脚本会：
 
-1. Checks Windows virtualization and WSL2.
-2. Installs or verifies Debian 13 from the WSL Store.
-3. Enables WSL systemd.
-4. Creates a clean PVE node with a user-chosen hostname.
-5. Fixes `/etc/hosts` dynamically before `pve-cluster` starts.
-6. Adds the Proxmox VE repository and installs PVE 9.2 with UEFI firmware.
-7. Enables `lxcfs` for the WSL container environment.
-8. Verifies PVE Web UI, KVM, and LXC basics.
+1. 检查 Windows 虚拟化和 WSL2。
+2. 安装或验证 Debian 13 WSL 发行版。
+3. 启用 WSL systemd。
+4. 用用户指定的主机名创建干净的 PVE 节点。
+5. 在 `pve-cluster` 启动前动态修正 `/etc/hosts`。
+6. 添加 Proxmox VE 仓库并安装 PVE 9.2 + UEFI 固件。
+7. 启用 `lxcfs`，适配 WSL2 容器环境。
+8. 验证 PVE Web UI、KVM、LXC。
 
-The user sets the root password interactively. The repository never stores credentials.
+用户在安装过程中自行设置 root 密码。仓库不会存储或传输任何凭据。
 
-## Quick start
+## 快速开始
 
-Run PowerShell as Administrator and execute:
+以管理员身份打开 PowerShell：
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
@@ -36,7 +38,7 @@ Invoke-WebRequest -Uri https://raw.githubusercontent.com/HPygmalion/Proxmox-VE-i
 .\Install-PVE.ps1
 ```
 
-Or clone the repository and run locally:
+或克隆仓库运行：
 
 ```powershell
 git clone https://github.com/HPygmalion/Proxmox-VE-in-WSL2.git
@@ -45,51 +47,64 @@ Set-ExecutionPolicy Bypass -Scope Process -Force
 .\scripts\Install-PVE.ps1
 ```
 
-Default parameters:
+### 默认参数
 
-- WSL distro name: `PVE`
-- Install location: `D:\WSL\PVE`
-- PVE hostname: `HPygmalion`
-- Proxmox mirror: Tsinghua `pve-no-subscription`
+- WSL 发行版名：`PVE`
+- 安装路径：`D:\WSL\PVE`
+- PVE 主机名：`HPygmalion`
+- 镜像源：清华 `pve-no-subscription`
 
-You can override them:
+### 使用官方源
 
 ```powershell
-.\scripts\Install-PVE.ps1 -DistroName PVE -InstallPath D:\WSL\PVE -Hostname pve-lab
+.\scripts\Install-PVE.ps1 -Mirror official
 ```
 
-## Access PVE
+### 自定义主机名和路径
 
-After installation, open:
+```powershell
+.\scripts\Install-PVE.ps1 -DistroName PVE -InstallPath D:\WSL\PVE -Hostname pve-lab -Mirror tsinghua
+```
+
+## 访问 PVE Web UI
+
+安装完成后打开：
 
 ```text
 https://localhost:8006
 ```
 
-Login:
+- 用户名：`root`
+- 密码：安装过程中设置的密码
+- 认证领域：`Linux PAM`
 
-- Username: `root`
-- Password: set during installation
-- Realm: `Linux PAM`
+## 验证结果
 
-## Important limitations
+脚本会验证：
 
-- WSL2 networking uses NAT. VMs and containers need separate `vmbr0` and NAT configuration.
-- This setup is not equivalent to bare-metal PVE.
-- Do not enable Ceph, HA, or production workloads.
-- WSL kernels are provided by Microsoft, not Proxmox.
-- Start/stop services may need a `wsl --shutdown` between reboots.
+- PVE 所有核心服务 `active`。
+- `systemctl --failed` 无输出。
+- `/dev/kvm` 存在。
+- 启动一个一次性 Alpine CT 并确认可运行后删除。
+- Web UI 可通过 `localhost:8006` 访问。
 
-## Backup and restore
+## 重要限制
 
-Export:
+- WSL2 的网络是 NAT。虚拟机和容器需要单独配置 `vmbr0` 和 NAT 才能联网。
+- WSL2 PVE 不等价于裸机 PVE，不支持 Ceph、HA、物理网卡直通。
+- WSL 内核由 Microsoft 提供，不是 PVE 内核。
+- 遇到启动异常，先执行 `wsl --shutdown` 后重试。
+
+## 备份与恢复
+
+导出：
 
 ```powershell
 wsl --shutdown
 wsl --export PVE D:\PVE-Backups\PVE-golden.tar
 ```
 
-Restore:
+恢复：
 
 ```powershell
 wsl --unregister PVE
@@ -97,8 +112,9 @@ wsl --import PVE "D:\WSL\PVE" "D:\PVE-Backups\PVE-golden.tar" --version 2
 wsl --set-default PVE
 ```
 
-## License
+## 许可证
 
-MIT. See [LICENSE](LICENSE).
+MIT。详见 [LICENSE](LICENSE)。
 
-Proxmox VE is a trademark of Proxmox Server Solutions GmbH. This project is independent and not affiliated with Proxmox.
+Proxmox VE 是 Proxmox Server Solutions GmbH 的商标。本项目独立，不隶属于 Proxmox。
+
