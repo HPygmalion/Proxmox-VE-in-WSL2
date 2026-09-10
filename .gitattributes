@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings so they can be piped straight into bash.
+*.sh text eol=lf
+# PowerShell scripts should keep Windows line endings for compatibility.
+*.ps1 text eol=crlf
+*.md text eol=lf
