@@ -22,6 +22,9 @@ $ErrorActionPreference = 'Stop'
 $SourceDistro = "$DistroName-src"
 if (-not $InstallPath) { $InstallPath = Join-Path $env:LOCALAPPDATA "WSL\$DistroName" }
 $InstallPath = [IO.Path]::GetFullPath($InstallPath)
+# Keep both large build artifacts on the target drive, not LOCALAPPDATA.
+$SourceInstallPath = "$InstallPath-src"
+$TransferArchive = "$InstallPath-transfer.tar"
 $stateDirectory = Join-Path $env:LOCALAPPDATA 'Proxmox-VE-in-WSL2\installs'
 $stage = 'preflight'
 $exitCode = 1
@@ -41,7 +44,7 @@ function Assert-Preflight {
     if ($InstallPath -notmatch '^[A-Za-z]:\\' -or $InstallPath -match '[\x00-\x1f]') {
         throw 'InstallPath must be a local drive path.'
     }
-    foreach ($file in 'bootstrap-pve.sh','Common.ps1','Enable-PVEKeepAlive.ps1') {
+    foreach ($file in 'bootstrap-pve.sh','Common.ps1','Enable-PVEKeepAlive.ps1','install-keepalive.sh') {
         if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $file))) { throw "Missing $file. Download/extract the complete repository, not one script." }
     }
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { throw 'Install WSL first: wsl --install --no-distribution. Reboot, then rerun this installer.' }
@@ -120,15 +123,19 @@ function Initialize-Wsl {
 
 function New-BuildDistro {
     if ($script:state) { Write-Step "Resuming '$SourceDistro'"; return }
-    Write-Step "Creating a clean Debian build distro '$SourceDistro'"
+    if ((Test-Path -LiteralPath $SourceInstallPath) -and @(Get-ChildItem -LiteralPath $SourceInstallPath -Force).Count) {
+        throw "Build directory is not empty: $SourceInstallPath. Nothing will be overwritten."
+    }
+    if (Test-Path -LiteralPath $TransferArchive) { throw "Transfer archive already exists: $TransferArchive. Preserve or move it before installing." }
+    Write-Step "Creating a clean Debian build distro '$SourceDistro' at $SourceInstallPath"
     New-Item -ItemType Directory -Force -Path $stateDirectory | Out-Null
     $script:state = [pscustomobject]@{ Distro=$DistroName; Source=$SourceDistro; InstallPath=$InstallPath; Hostname=$Hostname; Mirror=$Mirror; NatSubnet=$NatSubnet; NoNat=[bool]$NoNat; BootstrapComplete=$false }
     $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
-    & wsl.exe --install -d Debian --name $SourceDistro --no-launch
+    & wsl.exe --install -d Debian --name $SourceDistro --location $SourceInstallPath --no-launch
     if ($LASTEXITCODE -ne 0) {
         if (@(Get-WslDistros) -contains $SourceDistro) { throw 'WSL partially created the build distro. Inspect it before retrying with -Resume.' }
         Write-Warning 'Initial Debian download failed; retrying using --web-download.'
-        & wsl.exe --install -d Debian --name $SourceDistro --no-launch --web-download
+        & wsl.exe --install -d Debian --name $SourceDistro --location $SourceInstallPath --no-launch --web-download
         if ($LASTEXITCODE -ne 0) { throw 'Debian download failed. Check network access to the Microsoft WSL distribution catalog and image host.' }
     }
 }
@@ -177,7 +184,7 @@ function Invoke-Bootstrap {
 }
 
 function Import-Target {
-    $archive = Join-Path $stateDirectory "$DistroName.tar"
+    $archive = $TransferArchive
     Write-Step "Exporting verified build to '$DistroName'"
     if ((Invoke-WslBash -Distro $SourceDistro -Script 'sync') -ne 0) { throw 'Could not sync the build filesystem.' }
     & wsl.exe --terminate $SourceDistro
@@ -193,7 +200,7 @@ function Import-Target {
 }
 
 function Complete-Target {
-    $archive = Join-Path $stateDirectory "$DistroName.tar"
+    $archive = $TransferArchive
     # Keep both source and archive until the imported target passes all checks.
     Test-PveApi -Distro $DistroName
     $services = 'for unit in pve-wsl-hosts pve-cluster pvestatd pvedaemon pveproxy lxcfs pve-guests; do systemctl is-active --quiet "$unit" || { echo "Inactive: $unit" >&2; exit 1; }; done'
