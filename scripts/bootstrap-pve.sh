@@ -343,7 +343,7 @@ list_network_interfaces() (
     diagnostics=$(mktemp)
     trap 'rm -f "$diagnostics"' EXIT
     for attempt in {1..10}; do
-        if interfaces=$(ifquery --list 2>"$diagnostics"); then
+        if interfaces=$(ifquery -i "$network_file" --list 2>"$diagnostics"); then
             cat "$diagnostics" >&2
             printf '%s\n' "$interfaces"
             exit 0
@@ -358,7 +358,7 @@ list_network_interfaces() (
     # source directives or guess how to repair an existing configuration.
     if ! grep -Eq '^[[:space:]]*[^#[:space:]]' "$network_file"; then
         printf '\nauto lo\niface lo inet loopback\n' >>"$network_file"
-        if interfaces=$(ifquery --list 2>"$diagnostics"); then
+        if interfaces=$(ifquery -i "$network_file" --list 2>"$diagnostics"); then
             cat "$diagnostics" >&2
             printf '%s\n' "$interfaces"
             exit 0

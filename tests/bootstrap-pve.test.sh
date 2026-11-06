@@ -206,7 +206,7 @@ nat)
         esac
     }
     ifquery() {
-        if [[ $1 == --list ]]; then
+        if [[ $1 == -i && $3 == --list ]]; then
             if grep -q '^iface vmbr0 ' "$sandbox/etc/network/interfaces"; then printf 'vmbr0\n'; fi
             return 0
         fi
