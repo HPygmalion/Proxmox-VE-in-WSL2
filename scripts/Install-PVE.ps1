@@ -146,10 +146,19 @@ function New-BuildDistro {
     $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
     & wsl.exe --install -d Debian --name $SourceDistro --location $SourceInstallPath --no-launch
     if ($LASTEXITCODE -ne 0) {
-        if (@(Get-WslDistros) -contains $SourceDistro) { throw 'WSL partially created the build distro. Inspect it before retrying with -Resume.' }
-        Write-Warning 'Initial Debian download failed; retrying using --web-download.'
-        & wsl.exe --install -d Debian --name $SourceDistro --location $SourceInstallPath --no-launch --web-download
-        if ($LASTEXITCODE -ne 0) { throw 'Debian download failed. Check network access to the Microsoft WSL distribution catalog and image host.' }
+        # `wsl --install` returns ERROR_ALREADY_EXISTS when the distro was
+        # created but the command still reports failure. A distro that answers
+        # is usable; only a missing one is a failed download.
+        $created = @(Get-WslDistros) -contains $SourceDistro
+        $answers = $created -and ((Invoke-WslBash -Distro $SourceDistro -Script 'exit 0') -eq 0)
+        if (-not $answers) {
+            if ($created) { throw 'WSL partially created the build distro. Inspect it before retrying with -Resume.' }
+            Write-Warning 'Initial Debian download failed; retrying using --web-download.'
+            & wsl.exe --install -d Debian --name $SourceDistro --location $SourceInstallPath --no-launch --web-download
+            if ($LASTEXITCODE -ne 0 -and -not (@(Get-WslDistros) -contains $SourceDistro)) {
+                throw 'Debian download failed. Check network access to the Microsoft WSL distribution catalog and image host.'
+            }
+        }
     }
 }
 
@@ -190,8 +199,14 @@ function Invoke-Bootstrap {
     Write-Step 'Installing PVE; package-manager progress follows (can take tens of minutes)'
     # Run a real file, not bash -s: passwd and package scripts must not consume
     # the remainder of the script from stdin. All secrets were set separately.
+    # Progress goes to the console, but success is the exit code alone: wsl.exe
+    # writes routine notices to stderr, which PowerShell must not treat as failure.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     & wsl.exe -d $SourceDistro -u root --exec bash /root/pve-bootstrap.sh
-    if ($LASTEXITCODE -ne 0) { throw "Bootstrap failed. Keep '$SourceDistro' and rerun with the same options plus -Resume after fixing the cause." }
+    $bootstrapExit = $LASTEXITCODE
+    $ErrorActionPreference = $previousPreference
+    if ($bootstrapExit -ne 0) { throw "Bootstrap failed. Keep '$SourceDistro' and rerun with the same options plus -Resume after fixing the cause." }
     $state.BootstrapComplete = $true
     $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
 }
