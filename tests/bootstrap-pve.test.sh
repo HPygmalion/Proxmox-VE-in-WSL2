@@ -13,7 +13,7 @@ assert_absent() { if grep -Fq -- "$2" "$1"; then fail "Unexpected '$2' in $1"; f
 # Each case is a fresh process: do not put shell functions under `if`, which
 # disables errexit inside them and would hide the original EXIT-trap bug.
 if [[ ${1:-} != --case ]]; then
-    for case_name in platform subnet routes apt key hosts services network_init nat lxc; do
+    for case_name in platform subnet routes apt key hosts services network_init network_commit nat lxc; do
         bash "$0" --case "$case_name"
         printf 'PASS: %s\n' "$case_name"
     done
@@ -186,6 +186,57 @@ network_init)
                 ;;
         esac
     done
+    ;;
+network_commit)
+    # ifupdown2 stages the first-install config as interfaces.new and nothing
+    # renames it until boot, so the installer must validate and commit it.
+    mkdir -p "$sandbox/bin" "$sandbox/network"
+    cat >"$sandbox/bin/ifquery" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$sandbox/ifquery"
+exit "$ifquery_status"
+EOF
+    chmod +x "$sandbox/bin/ifquery"
+    export sandbox
+    export PATH="$sandbox/bin:$PATH"
+    network_file="$sandbox/network/interfaces"
+    pending="$network_file.new"
+    ifquery_status=0
+    export ifquery_status
+    printf 'source /etc/network/interfaces.d/*\n' >"$network_file"
+    printf 'auto lo\niface lo inet loopback\niface eth0 inet manual\n' >"$pending"
+    commit_initial_network_config "$network_file" 1 >"$sandbox/out"
+    [[ ! -e $pending ]] || fail 'Validated pending configuration was not committed'
+    assert_contains "$network_file" 'iface lo inet loopback'
+    assert_contains "$sandbox/ifquery" "-i $pending --list"
+
+    printf 'source /etc/network/interfaces.d/*\n' >"$network_file"
+    printf 'auto lo\n' >"$pending"
+    ifquery_status=1
+    if (commit_initial_network_config "$network_file" 1) >"$sandbox/out" 2>&1; then
+        fail 'Invalid pending configuration was committed'
+    fi
+    assert_contains "$sandbox/out" 'is invalid'
+    assert_contains "$network_file" 'source /etc/network/interfaces.d/*'
+    assert_absent "$network_file" 'auto lo'
+    [[ -f $pending ]] || fail 'Invalid pending configuration was removed'
+
+    ifquery_status=0
+    if (commit_initial_network_config "$network_file" 0) >"$sandbox/out" 2>&1; then
+        fail 'Pending configuration was consumed on a rerun'
+    fi
+    assert_contains "$sandbox/out" 'apply or discard'
+    [[ -f $pending ]] || fail 'Rerun removed an uncommitted configuration'
+    rm "$pending"
+    commit_initial_network_config "$network_file" 1 >"$sandbox/out"
+    assert_contains "$network_file" 'source /etc/network/interfaces.d/*'
+
+    ln -s "$network_file" "$pending"
+    if (commit_initial_network_config "$network_file" 1) >"$sandbox/out" 2>&1; then
+        fail 'A symlinked pending configuration was accepted'
+    fi
+    assert_contains "$sandbox/out" 'Unexpected pending network configuration'
+    [[ -L $pending ]] || fail 'Rejected symlink was removed'
     ;;
 nat)
     # Rewrite absolute config paths in this function only. All host/network

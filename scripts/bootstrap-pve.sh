@@ -295,7 +295,28 @@ download_release_key() (
     mv -f "$temporary_file" "$keyring"
 )
 
+commit_initial_network_config() {
+    local network_file=$1 fresh_install=$2 pending="$1.new"
+    [[ -e $pending ]] || return 0
+    # ifupdown2's first-install compatibility hook stages interfaces.new.
+    # pvenetcommit renames it only at boot, so waiting never activates it.
+    [[ $fresh_install == 1 ]] \
+        || die "Pending network changes exist at $pending; apply or discard them explicitly before rerunning."
+    [[ -f $pending && ! -L $pending ]] \
+        || die "Unexpected pending network configuration: $pending"
+    ifquery -i "$pending" --list >/dev/null \
+        || die "Package-generated network configuration is invalid: $pending"
+    log 'Committing validated first-install network configuration (without restarting host networking)'
+    mv -- "$pending" "$network_file"
+}
+
 install_pve() {
+    local fresh_install=0
+    command -v pveversion >/dev/null 2>&1 || fresh_install=1
+    # Never consume changes that predated this package installation.
+    [[ ! -e /etc/network/interfaces.new ]] \
+        || die 'Pending /etc/network/interfaces.new exists before package installation; apply or discard it first.'
+
     log 'Installing Proxmox release key'
     export DEBIAN_FRONTEND=noninteractive
     download_release_key /usr/share/keyrings/proxmox-archive-keyring.gpg
@@ -320,6 +341,11 @@ EOF
     # `apt-get update` runs and the PVE update timer keep working.
     disable_enterprise_repos
     apt_run update
+
+    # ifupdown2 stages its first-install compatibility config as interfaces.new
+    # and only pvenetcommit (at boot) renames it. Commit it now so the NAT step
+    # reads the real configuration instead of the still-empty original file.
+    commit_initial_network_config /etc/network/interfaces "$fresh_install"
 }
 
 configure_lxcfs() {
