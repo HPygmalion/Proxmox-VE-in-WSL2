@@ -2,7 +2,7 @@
 
 # Proxmox VE in WSL2
 
-在 Windows 11 的 WSL2 中运行基于 Debian 13 的 Proxmox VE 9.x。安装器自动配置 systemd、主机名解析、KVM/LXC 支持、CT/VM 的 NAT 网络和登录保活。
+在 Windows 11 的 WSL2 中运行基于 Debian 13 的 Proxmox VE 9.x。安装器自动配置 systemd、主机名解析、KVM/LXC 支持和登录保活。虚拟机和容器的网络由你在安装后自己添加；加 `-EnableNat` 才会预置一个隔离 NAT 网桥。
 
 > **非官方实验项目**，用于个人实验、开发和迁移测试。不是裸机 PVE 的替代品，不用于生产、Ceph、HA、物理网卡直通或关键业务。软件包来自滚动更新的 PVE 9 仓库，补丁版本不锁定。
 
@@ -31,8 +31,8 @@
 - 配置 WSL systemd、默认 root 用户和动态 hostname→当前 IPv4 映射。
 - 安装 PVE 9、UEFI 固件、KVM/LXC 依赖，适配 WSL 的 lxcfs 启动条件。
 - 启用 no-subscription 软件源，禁用安装包附带的 enterprise 订阅源。
-- 创建隔离 `vmbr0` 桥、IPv4 转发、NAT、DHCP/DNS；不把 Windows 物理网卡接入网桥。
-- 实际启动 QEMU 验证 KVM，创建一次性非特权 Alpine CT，验证启动、网关、外网和 DNS，再删除测试 CT。
+- 仅在加了 `-EnableNat` 时，创建隔离 `vmbr0` 桥、IPv4 转发、NAT、DHCP/DNS；不把 Windows 物理网卡接入网桥。默认不配置 guest 网络。
+- 实际启动 QEMU 验证 KVM，创建一次性非特权 Alpine CT 验证启动，再删除测试 CT。加了 `-EnableNat` 时，还会验证容器的网关、外网和 DNS。
 - 将验证后的构建导出并导入为目标发行版；检查 API 与各核心服务。
 - 安装 Linux 服务健康检查和 Windows 当前用户登录/每分钟重试任务。
 - 仅在目标验证完成后删除安装器创建的源发行版和传输归档。
@@ -43,10 +43,10 @@
 |---|---|
 | `-DistroName` | `PVE` |
 | `-InstallPath` | `%LOCALAPPDATA%\WSL\<DistroName>`，须为空的本地目录 |
-| `-Hostname` | `pve-lab`，初始化后不要随意修改 PVE 节点名 |
+| `-Hostname` | 安装前询问；初始化后不要随意修改 PVE 节点名 |
 | `-Mirror` | `tsinghua`；也可选 `official` |
-| `-NatSubnet` | `10.10.10.0/24`，仅支持合法 RFC1918 私网 `/24` |
-| `-NoNat` | 不配置 guest 网络，联网由你负责 |
+| `-EnableNat` | 预置隔离 NAT 网桥；默认不配置 guest 网络，装好后自己添加 |
+| `-NatSubnet` | `10.10.10.0/24`，仅在 `-EnableNat` 时使用，仅支持合法 RFC1918 私网 `/24` |
 | `-NoSetDefault` | 保留当前默认 WSL 发行版 |
 | `-SkipKeepAlive` | 明确跳过两侧保活，不保证后台存活 |
 | `-AllowMissingKvm` | 允许没有 `/dev/kvm` 的 LXC-only 安装，不代表 VM 可用 |
@@ -56,14 +56,16 @@
 | `-RootPassword` | 无人值守时传 **SecureString**；正常使用无需传参 |
 
 ```powershell
-.\scripts\Install-PVE.ps1 -DistroName PVE-lab -InstallPath D:\WSL\PVE-lab -Hostname pve-lab -NatSubnet 10.20.30.0/24 -NoSetDefault
+.\scripts\Install-PVE.ps1 -DistroName PVE-lab -InstallPath D:\WSL\PVE-lab -Hostname pve-lab -EnableNat -NatSubnet 10.20.30.0/24 -NoSetDefault
 ```
 
 密码在安装前收集并通过标准输入送入 `chpasswd`。不要把真实密码写成命令行明文或保存进脚本。无人值守调用方应从其凭据存储取得 SecureString；没有终端且没有提供密码时会失败，不会替用户设置随机密码。
 
 ## CT / VM 网络
 
-默认：
+默认不配置。装好后在 PVE 里自己添加网络，和干净安装的 PVE 一样。
+
+加 `-EnableNat` 才会预置一套隔离 NAT，供 guest 开箱联网：
 
 - 桥：`vmbr0`，地址/网关：`10.10.10.1/24`。
 - DHCP：`10.10.10.100`–`10.10.10.200`，DNS：`10.10.10.1`。
@@ -112,7 +114,7 @@ Start-ScheduledTask -TaskName WSL-PVE-Supervisor
 失败会返回非零退出码，指出阶段；构建发行版和导出文件保留便于排查。已成功安装的目标不会被重新覆盖。续跑时使用原名称、路径、主机名、源和子网：
 
 ```powershell
-.\scripts\Install-PVE.ps1 -DistroName PVE-lab -InstallPath D:\WSL\PVE-lab -Hostname pve-lab -NatSubnet 10.20.30.0/24 -NoSetDefault -Resume
+.\scripts\Install-PVE.ps1 -DistroName PVE-lab -InstallPath D:\WSL\PVE-lab -Hostname pve-lab -EnableNat -NatSubnet 10.20.30.0/24 -NoSetDefault -Resume
 ```
 
 如果导入目标已经存在但最后验证/保活失败，保留它，先在目标里诊断或单独修复保活；不要立即注销重来。对安装器记录为“已导入”的目标，`-Resume` 只续跑验证和保活，不重置密码、不重新导入；其他已有目标仍会被拒绝。

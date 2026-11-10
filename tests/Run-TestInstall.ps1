@@ -8,5 +8,5 @@ $rng.GetBytes($bytes)
 $rng.Dispose()
 $secret = ConvertTo-SecureString ([Convert]::ToBase64String($bytes)) -AsPlainText -Force
 [Array]::Clear($bytes, 0, $bytes.Length)
-& "$PSScriptRoot\..\scripts\Install-PVE.ps1" -DistroName $DistroName -Hostname pve-acceptance -RootPassword $secret -NoSetDefault -Resume:$Resume -SkipKeepAlive:$SkipKeepAlive -InstallPath $InstallPath
+& "$PSScriptRoot\..\scripts\Install-PVE.ps1" -DistroName $DistroName -Hostname pve-acceptance -RootPassword $secret -EnableNat -NoSetDefault -Resume:$Resume -SkipKeepAlive:$SkipKeepAlive -InstallPath $InstallPath
 exit $LASTEXITCODE

@@ -4,11 +4,11 @@ param(
     [string]$DistroName = 'PVE',
     [string]$InstallPath = '',
     [ValidatePattern('^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')]
-    [string]$Hostname = 'pve-lab',
+    [string]$Hostname,
     [ValidateSet('tsinghua', 'official')][string]$Mirror = 'tsinghua',
     [string]$NatSubnet = '10.10.10.0/24',
     [Security.SecureString]$RootPassword,
-    [switch]$NoNat,
+    [switch]$EnableNat,
     [switch]$SkipKeepAlive,
     [switch]$AllowMissingKvm,
     [switch]$NoSetDefault,
@@ -71,7 +71,8 @@ function Assert-Preflight {
             throw "Build distro '$SourceDistro' exists. Use -Resume only for a build owned by this installer; no distro is deleted automatically."
         }
         $script:state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
-        if ($state.Distro -ne $DistroName -or $state.Source -ne $SourceDistro -or $state.InstallPath -ne $InstallPath -or $state.Hostname -ne $Hostname -or $state.NatSubnet -ne $NatSubnet -or $state.NoNat -ne [bool]$NoNat -or $state.Mirror -ne $Mirror) {
+        if (-not $Hostname) { $script:Hostname = [string]$state.Hostname }
+        if ($state.Distro -ne $DistroName -or $state.Source -ne $SourceDistro -or $state.InstallPath -ne $InstallPath -or $state.Hostname -ne $Hostname -or $state.NatSubnet -ne $NatSubnet -or $state.EnableNat -ne [bool]$EnableNat -or $state.Mirror -ne $Mirror) {
             throw 'Resume parameters differ from the original install. Use the same options or a new distro name.'
         }
     }
@@ -99,6 +100,18 @@ function Read-PvePassword {
         Write-Warning 'Passwords must match exactly, be nonempty, and contain no line breaks.'
     }
     throw 'Password confirmation failed; no installation was started.'
+}
+
+function Read-PveHostname {
+    if ($Hostname) { return $Hostname }
+    if ([Console]::IsInputRedirected) { throw 'No terminal is available. Supply -Hostname; no default hostname is used.' }
+    Write-Host 'Choose the PVE node hostname. It becomes the node name and should not be changed after installation.'
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        $chosen = (Read-Host 'Hostname').Trim()
+        if ($chosen -match '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$') { return $chosen }
+        Write-Warning 'A hostname is 1-63 letters, digits or hyphens, and cannot start or end with a hyphen.'
+    }
+    throw 'Hostname confirmation failed; no installation was started.'
 }
 
 function Initialize-Wsl {
@@ -129,7 +142,7 @@ function New-BuildDistro {
     if (Test-Path -LiteralPath $TransferArchive) { throw "Transfer archive already exists: $TransferArchive. Preserve or move it before installing." }
     Write-Step "Creating a clean Debian build distro '$SourceDistro' at $SourceInstallPath"
     New-Item -ItemType Directory -Force -Path $stateDirectory | Out-Null
-    $script:state = [pscustomobject]@{ Distro=$DistroName; Source=$SourceDistro; InstallPath=$InstallPath; Hostname=$Hostname; Mirror=$Mirror; NatSubnet=$NatSubnet; NoNat=[bool]$NoNat; BootstrapComplete=$false }
+    $script:state = [pscustomobject]@{ Distro=$DistroName; Source=$SourceDistro; InstallPath=$InstallPath; Hostname=$Hostname; Mirror=$Mirror; NatSubnet=$NatSubnet; EnableNat=[bool]$EnableNat; BootstrapComplete=$false }
     $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
     & wsl.exe --install -d Debian --name $SourceDistro --location $SourceInstallPath --no-launch
     if ($LASTEXITCODE -ne 0) {
@@ -166,7 +179,7 @@ fi
 }
 
 function Invoke-Bootstrap {
-    $nat = if ($NoNat) { '0' } else { '1' }
+    $nat = if ($EnableNat) { '1' } else { '0' }
     $noKvm = if ($AllowMissingKvm) { '1' } else { '0' }
     $body = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'bootstrap-pve.sh')) -replace "`r`n", "`n"
     # Only non-secret, validated configuration is embedded in the staged script.
@@ -229,6 +242,7 @@ try {
     }
     else {
         $script:password = Read-PvePassword
+        $script:Hostname = Read-PveHostname
         $stage = 'WSL configuration'
         Initialize-Wsl
         $stage = 'Debian download'

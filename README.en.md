@@ -2,7 +2,7 @@ English | [简体中文](README.md)
 
 # Proxmox VE in WSL2
 
-Run Debian 13 / Proxmox VE 9.x on Windows 11 WSL2. The installer configures systemd, hostname resolution, KVM/LXC support, guest NAT networking and login keep-alive.
+Run Debian 13 / Proxmox VE 9.x on Windows 11 WSL2. The installer configures systemd, hostname resolution, KVM/LXC support and login keep-alive. Guest networking is left for you to add afterwards; pass `-EnableNat` to preconfigure an isolated NAT bridge.
 
 > **Unofficial experimental project.** Intended for personal labs, development and migration tests, not production, Ceph, HA, physical bridging, passthrough or critical workloads. Packages follow the rolling PVE 9 repository; patch versions are not pinned.
 
@@ -31,8 +31,8 @@ Initial WSL/BIOS enablement may need administrator rights and reboot. The instal
 - Configure systemd, default root user and authoritative dynamic node hostname mapping.
 - Install PVE 9, UEFI firmware, KVM/LXC dependencies and the WSL lxcfs compatibility override.
 - Enable no-subscription packages and disable package-provided enterprise subscription repositories.
-- Create isolated `vmbr0`, IPv4 forwarding, NAT, DHCP and DNS (no physical NIC bridging).
-- Start QEMU with KVM and create a disposable unprivileged Alpine CT; verify startup, gateway, internet and DNS, then remove the CT.
+- Only with `-EnableNat`, create isolated `vmbr0`, IPv4 forwarding, NAT, DHCP and DNS (no physical NIC bridging). Guest networking is not configured by default.
+- Start QEMU with KVM and create a disposable unprivileged Alpine CT to verify startup, then remove it. With `-EnableNat`, also verify the container's gateway, internet access and DNS.
 - Export/import the verified build, verify each core service and API, install keep-alive, then remove only the installer-owned source/transfer archive.
 
 ## Options
@@ -41,10 +41,10 @@ Initial WSL/BIOS enablement may need administrator rights and reboot. The instal
 |---|---|
 | `-DistroName` | `PVE` |
 | `-InstallPath` | `%LOCALAPPDATA%\WSL\<DistroName>`; empty local directory |
-| `-Hostname` | `pve-lab`; do not casually rename an initialized PVE node |
+| `-Hostname` | Asked before installation; do not casually rename an initialized PVE node |
 | `-Mirror` | `tsinghua` or `official` |
-| `-NatSubnet` | `10.10.10.0/24`; valid RFC1918 private IPv4 `/24` only |
-| `-NoNat` | Configure guest networking yourself |
+| `-EnableNat` | Preconfigure an isolated NAT bridge; guest networking is left to you by default |
+| `-NatSubnet` | `10.10.10.0/24`, used only with `-EnableNat`; valid RFC1918 private IPv4 `/24` only |
 | `-NoSetDefault` | Preserve the current default WSL distro |
 | `-SkipKeepAlive` | Explicitly skip both keep-alive layers |
 | `-AllowMissingKvm` | Allow LXC-only installation without `/dev/kvm`; does not promise working VMs |
@@ -54,14 +54,16 @@ Initial WSL/BIOS enablement may need administrator rights and reboot. The instal
 | `-RootPassword` | **SecureString** for unattended callers; unnecessary for normal interactive use |
 
 ```powershell
-.\scripts\Install-PVE.ps1 -DistroName PVE-lab -InstallPath D:\WSL\PVE-lab -Hostname pve-lab -NatSubnet 10.20.30.0/24 -NoSetDefault
+.\scripts\Install-PVE.ps1 -DistroName PVE-lab -InstallPath D:\WSL\PVE-lab -Hostname pve-lab -EnableNat -NatSubnet 10.20.30.0/24 -NoSetDefault
 ```
 
 Password collection happens before installation. It is sent to `chpasswd` over stdin. Do not embed real plaintext passwords in command lines or scripts. Unattended callers should obtain SecureString credentials from their secret store; no terminal and no supplied password means failure, not a silently generated password.
 
 ## Guest networking
 
-Defaults: `vmbr0`, gateway/DNS `10.10.10.1/24`, DHCP pool `10.10.10.100`–`10.10.10.200`. Connect CTs/VMs to `vmbr0`, use a virtio NIC for VMs, and enable DHCP inside the guest. Static addresses outside the pool also work if unused. Installing guest operating systems/applications is outside this installer's scope.
+Not configured by default. Add networking in PVE after installation, as with a normal clean PVE install.
+
+`-EnableNat` preconfigures an isolated NAT so guests have connectivity out of the box: `vmbr0`, gateway/DNS `10.10.10.1/24`, DHCP pool `10.10.10.100`–`10.10.10.200`. Connect CTs/VMs to `vmbr0`, use a virtio NIC for VMs, and enable DHCP inside the guest. Static addresses outside the pool also work if unused. Installing guest operating systems/applications is outside this installer's scope.
 
 Conflicting routes require choosing another `-NatSubnet`. Reruns restore same-subnet state but never silently renumber an existing bridge. dnsmasq listens on the guest bridge, not WSL's DNS proxy at `10.255.255.254:53`.
 
@@ -105,7 +107,7 @@ Remove this version's keep-alive without deleting PVE/guests:
 Failures return nonzero and name the stage. The build/transfer archive is preserved for diagnosis. Resume a pre-import build using the original options:
 
 ```powershell
-.\scripts\Install-PVE.ps1 -DistroName PVE-lab -InstallPath D:\WSL\PVE-lab -Hostname pve-lab -NatSubnet 10.20.30.0/24 -NoSetDefault -Resume
+.\scripts\Install-PVE.ps1 -DistroName PVE-lab -InstallPath D:\WSL\PVE-lab -Hostname pve-lab -EnableNat -NatSubnet 10.20.30.0/24 -NoSetDefault -Resume
 ```
 
 If target import succeeded but final validation/keep-alive failed, keep that target. For a target recorded by this installer as imported, `-Resume` retries only final validation/keep-alive without reimporting or resetting the password. All unrelated existing targets remain protected.
