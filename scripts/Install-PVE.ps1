@@ -44,7 +44,7 @@ function Assert-Preflight {
     if ($InstallPath -notmatch '^[A-Za-z]:\\' -or $InstallPath -match '[\x00-\x1f]') {
         throw 'InstallPath must be a local drive path.'
     }
-    foreach ($file in 'bootstrap-pve.sh','Common.ps1','Enable-PVEKeepAlive.ps1','install-keepalive.sh') {
+    foreach ($file in 'bootstrap-pve.sh','Common.ps1','Enable-PVEKeepAlive.ps1','install-keepalive.sh','wsl-anchor.vbs') {
         if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $file))) { throw "Missing $file. Download/extract the complete repository, not one script." }
     }
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { throw 'Install WSL first: wsl --install --no-distribution. Reboot, then rerun this installer.' }

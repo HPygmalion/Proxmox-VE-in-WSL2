@@ -50,9 +50,15 @@ $linux = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'install-keepalive.sh')
 if ((Invoke-WslBash -Distro $DistroName -Script $linux) -ne 0) { throw 'Linux health-check installation failed.' }
 if ($LinuxOnly) { Write-Host 'Linux health-check installed; Windows login task explicitly skipped.'; return }
 
-# Direct WSL anchor, with no wrapper that can die with WSL's console session.
-# The minute trigger retries after termination; IgnoreNew prevents duplicates.
-$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wsl.exe" -Argument "-d $DistroName -u root --exec /usr/local/sbin/pve-anchor" -WorkingDirectory $env:SystemRoot
+# wscript is a GUI host: it starts WSL hidden and waits for its exit, keeping
+# IgnoreNew effective without opening a console at each minute-trigger retry.
+$registration = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss' | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object DistributionName -eq $DistroName)
+if ($registration.Count -ne 1) { throw 'Could not locate the WSL distro registration.' }
+$launcherDirectory = Join-Path $registration[0].BasePath 'keepalive'
+New-Item -ItemType Directory -Force -Path $launcherDirectory | Out-Null
+$launcher = Join-Path $launcherDirectory 'wsl-anchor.vbs'
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'wsl-anchor.vbs') -Destination $launcher -Force
+$action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -Argument "//B //Nologo `"$launcher`" $DistroName" -WorkingDirectory $env:SystemRoot
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $login = New-ScheduledTaskTrigger -AtLogOn -User $identity
 $login.Delay = 'PT20S'
