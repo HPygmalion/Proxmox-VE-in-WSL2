@@ -270,11 +270,32 @@ disable_enterprise_repos() {
     done
 }
 
+# The Debian WSL image points its own repositories at deb.debian.org and
+# security.debian.org. Those hosts are unreachable from some networks, which
+# would fail the very first apt run, so the tsinghua mirror covers them too.
+configure_debian_mirror() {
+    [[ $PVE_MIRROR == tsinghua ]] || return 0
+    local file changed=0
+    for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list; do
+        [[ -f $file ]] || continue
+        if grep -qE 'https?://(deb|security)\.debian\.org/' "$file"; then
+            sed -i \
+                -e 's|https\?://security\.debian\.org/debian-security|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g' \
+                -e 's|https\?://deb\.debian\.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' \
+                "$file"
+            changed=1
+        fi
+    done
+    [[ $changed == 0 ]] || log 'Pointed the Debian repositories at the tsinghua mirror'
+    return 0
+}
+
 # The minimal Debian WSL image may lack iproute2 (used by the hosts helper) and
 # the other tools below, so install them before anything depends on them.
 install_base_tools() {
     log 'Installing base tools'
     export DEBIAN_FRONTEND=noninteractive
+    configure_debian_mirror
     disable_enterprise_repos
     apt_run update
     apt_run install -y ca-certificates curl wget gnupg iproute2 procps
@@ -580,7 +601,16 @@ verify_lxc() (
     fi
 
     log 'Verifying LXC with a disposable unprivileged container'
-    pveam update || die 'Could not refresh container templates; LXC verification was not completed.'
+    # pveam refreshes the Proxmox index and the community Turnkey index. The
+    # Turnkey host is unreachable from some networks; a cached index that still
+    # lists a template is enough for this check.
+    if ! pveam update; then
+        if pveam available --section system | awk '$2 ~ /^alpine-/ { found = 1 } END { exit !found }'; then
+            warn 'Could not refresh the community template index; using the cached index.'
+        else
+            die 'Could not refresh container templates; LXC verification was not completed.'
+        fi
+    fi
 
     # Match on the file name only: the column layout of `pveam available`
     # differs between versions and also lists arm64 templates.

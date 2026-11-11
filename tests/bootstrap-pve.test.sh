@@ -13,7 +13,7 @@ assert_absent() { if grep -Fq -- "$2" "$1"; then fail "Unexpected '$2' in $1"; f
 # Each case is a fresh process: do not put shell functions under `if`, which
 # disables errexit inside them and would hide the original EXIT-trap bug.
 if [[ ${1:-} != --case ]]; then
-    for case_name in platform subnet routes apt key hosts services network_init network_commit nat lxc; do
+    for case_name in platform subnet routes apt key hosts services network_init network_commit debian_mirror nat lxc; do
         bash "$0" --case "$case_name"
         printf 'PASS: %s\n' "$case_name"
     done
@@ -238,6 +238,35 @@ EOF
     assert_contains "$sandbox/out" 'Unexpected pending network configuration'
     [[ -L $pending ]] || fail 'Rejected symlink was removed'
     ;;
+debian_mirror)
+    # The Debian WSL image points at deb.debian.org; the tsinghua mirror must
+    # cover it too, and official must leave the file untouched.
+    mkdir -p "$sandbox/apt/sources.list.d"
+    : >"$sandbox/apt/sources.list"
+    definition=$(declare -f configure_debian_mirror)
+    definition=${definition//\/etc\/apt\//$sandbox/apt/}
+    eval "$definition"
+    sources="$sandbox/apt/sources.list.d/0000debian.sources"
+    printf 'Types: deb\nURIs: https://deb.debian.org/debian\nSuites: trixie\n' >"$sources"
+    printf 'Types: deb\nURIs: https://security.debian.org/debian-security\nSuites: trixie-security\n' \
+        >>"$sources"
+
+    PVE_MIRROR=official
+    configure_debian_mirror >"$sandbox/out"
+    assert_contains "$sources" 'https://deb.debian.org/debian'
+    assert_contains "$sources" 'https://security.debian.org/debian-security'
+
+    PVE_MIRROR=tsinghua
+    configure_debian_mirror >"$sandbox/out"
+    assert_contains "$sources" 'https://mirrors.tuna.tsinghua.edu.cn/debian'
+    assert_contains "$sources" 'https://mirrors.tuna.tsinghua.edu.cn/debian-security'
+    assert_absent "$sources" 'deb.debian.org'
+    assert_absent "$sources" 'security.debian.org'
+    assert_contains "$sandbox/out" 'tsinghua mirror'
+    cp "$sources" "$sandbox/first"
+    configure_debian_mirror >"$sandbox/out"
+    cmp "$sandbox/first" "$sources" || fail 'Mirror rewrite is not idempotent'
+    ;;
 nat)
     # Rewrite absolute config paths in this function only. All host/network
     # commands are fakes; ifup simulates creating the address after a retry.
@@ -296,8 +325,10 @@ lxc)
     PVE_NAT=0
     pveam() {
         case $1 in
-            update) [[ $scenario != metadata ]] ;;
-            available) if [[ $scenario != empty ]]; then printf 'system alpine-3.22-default_amd64.tar.xz\n'; fi ;;
+            # metadata: the community index is unreachable but a cached
+            # template is listed. nostale: no index and no cached template.
+            update) [[ $scenario != metadata && $scenario != nostale ]] ;;
+            available) if [[ $scenario != empty && $scenario != nostale ]]; then printf 'system alpine-3.22-default_amd64.tar.xz\n'; fi ;;
             download) [[ $scenario != download ]] ;;
             *) fail "Unexpected pveam $*" ;;
         esac
@@ -330,7 +361,7 @@ lxc)
     }
     export -f pveam pvesh pct sleep
     export sandbox
-    for scenario in metadata empty download create partial start stop destroy gateway internet dns success; do
+    for scenario in metadata nostale empty download create partial start stop destroy gateway internet dns success; do
         : >"$sandbox/pct"
         export scenario
         PVE_NAT=0
@@ -338,14 +369,19 @@ lxc)
         export PVE_NAT
         # Start an independent shell so errexit is truly enabled in verify_lxc.
         if bash -c 'source "$1"; verify_lxc' _ "$root/scripts/bootstrap-pve.sh" >"$sandbox/out" 2>&1; then
-            [[ $scenario == success ]] || fail "$scenario unexpectedly passed"
+            case $scenario in
+                success|metadata) ;;
+                *) fail "$scenario unexpectedly passed" ;;
+            esac
         else
             [[ $scenario != success ]] || fail 'Successful CT test failed'
         fi
         case $scenario in
-            partial|start|stop|destroy|gateway|internet|dns) assert_contains "$sandbox/pct" 'destroy 123 --purge' ;;
-            metadata|empty|download|create) assert_absent "$sandbox/pct" 'destroy' ;;
+            partial|start|stop|destroy|gateway|internet|dns|metadata) assert_contains "$sandbox/pct" 'destroy 123 --purge' ;;
+            nostale|empty|download|create) assert_absent "$sandbox/pct" 'destroy' ;;
             success) assert_contains "$sandbox/out" 'LXC verification passed.' ;;
+            metadata) assert_contains "$sandbox/out" 'using the cached index' ;;
+            nostale) assert_contains "$sandbox/out" 'Could not refresh container templates' ;;
         esac
         assert_absent "$sandbox/out" 'unbound variable'
     done

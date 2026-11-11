@@ -49,6 +49,21 @@ function Assert-Preflight {
     }
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { throw 'Install WSL first: wsl --install --no-distribution. Reboot, then rerun this installer.' }
     $distros = @(Get-WslDistros)
+    # WSL can report an incomplete list while its service restarts. A build
+    # directory that already holds data proves the distro exists, so wait for
+    # the list to agree instead of treating this as a fresh install.
+    if (-not ($distros -contains $SourceDistro) -and
+        (Test-Path -LiteralPath $SourceInstallPath) -and
+        @(Get-ChildItem -LiteralPath $SourceInstallPath -Force).Count) {
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+            Start-Sleep -Seconds 2
+            $distros = @(Get-WslDistros)
+            if ($distros -contains $SourceDistro) { break }
+        }
+        if (-not ($distros -contains $SourceDistro)) {
+            throw "Build directory '$SourceInstallPath' contains data but WSL does not list '$SourceDistro'. Inspect the distro before retrying."
+        }
+    }
     $script:targetExists = $distros -contains $DistroName
     if ($targetExists -and -not $Resume) { throw "Target '$DistroName' already exists. Nothing will be overwritten; choose a new -DistroName." }
     if (-not $targetExists -and (Test-Path -LiteralPath $InstallPath)) {
@@ -178,7 +193,7 @@ else
     if ! grep -q '^systemd=true$' /etc/wsl.conf; then sed -i '/^\[boot\]/a systemd=true' /etc/wsl.conf; fi
 fi
 '@
-    if ((Invoke-WslBash -Distro $SourceDistro -Script $setup) -ne 0) { throw 'Failed to configure systemd in the build distro.' }
+    if ((Invoke-WslBashReady -Distro $SourceDistro -Script $setup) -ne 0) { throw 'Failed to configure systemd in the build distro.' }
     & wsl.exe --terminate $SourceDistro
     if ($LASTEXITCODE -ne 0) { throw 'Failed to restart the build distro.' }
     $name = $Hostname
@@ -214,14 +229,37 @@ function Invoke-Bootstrap {
 function Import-Target {
     $archive = $TransferArchive
     Write-Step "Exporting verified build to '$DistroName'"
-    if ((Invoke-WslBash -Distro $SourceDistro -Script 'sync') -ne 0) { throw 'Could not sync the build filesystem.' }
+    # postfix leaves runtime sockets under its spool. They belong to no package
+    # and are recreated on startup, but `wsl --export` aborts on a socket, so
+    # remove them before exporting.
+    $clearSockets = @'
+set -euo pipefail
+if systemctl list-unit-files postfix.service --no-legend | grep -q postfix; then
+    systemctl stop postfix
+fi
+find /var/spool/postfix -type s -delete 2>/dev/null || true
+sync
+'@
+    if ((Invoke-WslBash -Distro $SourceDistro -Script $clearSockets) -ne 0) { throw 'Could not clear runtime sockets before export.' }
+    # wsl.exe writes routine notices (sparse VHD is experimental, for one) to
+    # stderr; only the exit code tells whether the operation itself worked.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     & wsl.exe --terminate $SourceDistro
-    if ($LASTEXITCODE -ne 0) { throw 'Could not stop the build distro.' }
-    & wsl.exe --export $SourceDistro $archive
-    if ($LASTEXITCODE -ne 0) { throw 'Build export failed; source distro is preserved.' }
-    New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
-    & wsl.exe --import $DistroName $InstallPath $archive --version 2
-    if ($LASTEXITCODE -ne 0) { throw "Import failed; source and archive remain at $archive." }
+    $terminateExit = $LASTEXITCODE
+    if ($terminateExit -eq 0) {
+        & wsl.exe --export $SourceDistro $archive
+        $exportExit = $LASTEXITCODE
+        if ($exportExit -eq 0) {
+            New-Item -ItemType Directory -Force -Path $InstallPath | Out-Null
+            & wsl.exe --import $DistroName $InstallPath $archive --version 2
+            $importExit = $LASTEXITCODE
+        }
+    }
+    $ErrorActionPreference = $previousPreference
+    if ($terminateExit -ne 0) { throw 'Could not stop the build distro.' }
+    if ($exportExit -ne 0) { throw 'Build export failed; source distro is preserved.' }
+    if ($importExit -ne 0) { throw "Import failed; source and archive remain at $archive." }
     $state | Add-Member -NotePropertyName Imported -NotePropertyValue $true -Force
     $state | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding UTF8
     Complete-Target

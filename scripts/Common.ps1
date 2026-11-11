@@ -56,6 +56,28 @@ function Invoke-WslInput {
     finally { $process.Dispose() }
 }
 
+function Invoke-WslBashReady {
+    # WSL occasionally fails to create a distro instance right after another
+    # distro stops (Wsl/Service/CreateInstance/E_UNEXPECTED). Only the first
+    # command of a step is retried, and only when every attempt failed, so a
+    # script that ran is never run twice.
+    param(
+        [Parameter(Mandatory)][string]$Distro,
+        [Parameter(Mandatory)][string]$Script,
+        [int]$Attempts = 3,
+        [int]$DelaySeconds = 5
+    )
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        $code = Invoke-WslBash -Distro $Distro -Script $Script
+        if ($code -eq 0) { return 0 }
+        if ($attempt -lt $Attempts) {
+            Write-Warning "WSL did not accept a command in '$Distro' (attempt $attempt of $Attempts); retrying."
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+    return $code
+}
+
 function Invoke-WslBash {
     param(
         [Parameter(Mandatory)][string]$Distro,
